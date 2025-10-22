@@ -1,0 +1,32 @@
+
+---
+
+## 🚫 **2️⃣ .gitignore**
+
+> Buat file bernama `.gitignore` di root folder yang sama.
+
+```gitignore
+# Python & Streamlit cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.DS_Store
+
+# Jupyter & Colab
+.ipynb_checkpoints/
+*.ipynb
+mlruns/
+
+# Model checkpoints / sementara
+*.joblib.tmp
+*.sav.tmp
+
+# VSCode / IDE
+.vscode/
+.idea/
+
+# Streamlit cache
+.streamlit/
+.cache/

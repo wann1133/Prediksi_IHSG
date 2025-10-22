@@ -1,0 +1,26 @@
+# Core ML + data
+numpy==1.26.4
+pandas==2.2.2
+scikit-learn==1.6.1
+scipy==1.13.1
+statsmodels==0.14.2
+
+# Finance & indicators
+yfinance==0.2.48
+ta==0.11.0
+
+# Gradient boosting
+xgboost==2.1.1
+
+# Optimization & logging
+optuna==4.5.0
+mlflow==2.16.0
+joblib==1.4.2
+
+# Utility
+python-dotenv==1.0.1
+pydantic==2.9.2
+
+# Visualization & frontend
+streamlit==1.39.0
+plotly==5.24.0
