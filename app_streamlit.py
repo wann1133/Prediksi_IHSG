@@ -1,5 +1,5 @@
 # ================================================
-# IHSG FORECAST STREAMLIT APP — FINAL STABLE VERSION (ERROR-FREE)
+# IHSG FORECAST STREAMLIT APP — FINAL CLOUD STABLE VERSION
 # ================================================
 import streamlit as st
 import pandas as pd
@@ -18,7 +18,8 @@ st.set_page_config(page_title="📈 Prediksi IHSG Interaktif", layout="wide")
 ARTIFACTS_DIR = "artifacts"
 MODEL_PATH = os.path.join(ARTIFACTS_DIR, "model_xgb.joblib")
 META_PATH = os.path.join(ARTIFACTS_DIR, "metadata.json")
-TICKER = "^JKSE"
+PRIMARY_TICKER = "^JKSE"
+ALT_TICKERS = ["JKSE.JK", "IDX:JKSE"]
 
 # --------------------------------
 # HELPER FUNCTIONS
@@ -38,10 +39,27 @@ def _ensure_1d_series(s):
     return s
 
 # --------------------------------
+# FETCH DATA (dengan fallback otomatis)
+# --------------------------------
+@st.cache_data(show_spinner=False)
+def fetch_data(start, end):
+    """Ambil data IHSG dengan fallback otomatis jika ticker utama gagal."""
+    tickers_to_try = [PRIMARY_TICKER] + ALT_TICKERS
+    for tk in tickers_to_try:
+        try:
+            df = yf.download(tk, start=start, end=end, auto_adjust=True, progress=False)
+            if not df.empty:
+                df = df.rename(columns=str.lower)
+                df.index.name = "date"
+                return df, tk
+        except Exception as e:
+            print(f"❌ Gagal mengambil {tk}: {e}")
+    return pd.DataFrame(), None
+
+# --------------------------------
 # FEATURE ENGINEERING
 # --------------------------------
 def build_features(data: pd.DataFrame) -> pd.DataFrame:
-    """Feature engineering untuk prediksi IHSG."""
     if data is None or data.empty:
         return pd.DataFrame()
 
@@ -84,7 +102,7 @@ def build_features(data: pd.DataFrame) -> pd.DataFrame:
     df['month'] = df.index.month
     df['target_ret_1d'] = df['ret'].shift(-1)
 
-    # Drop NaN tapi tetap simpan baris terakhir
+    # Drop NaN tapi simpan baris terakhir
     if len(df) > 0:
         last = df.iloc[[-1]]
         df = df.dropna()
@@ -191,12 +209,13 @@ horizon_days = horizon_options[horizon_label]
 
 # Fetch IHSG
 with st.spinner("📥 Mengambil data IHSG..."):
-    raw = yf.download(TICKER, start=start, end=end, auto_adjust=True)
-    raw = raw.rename(columns=str.lower)
+    raw, used_ticker = fetch_data(start, end)
 
 if raw.empty:
-    st.error("❌ Data IHSG kosong! Tidak ada data untuk periode yang dipilih.")
+    st.error("❌ Data IHSG kosong! Tidak ada data untuk periode yang dipilih atau koneksi Yahoo Finance bermasalah.")
     st.stop()
+else:
+    st.success(f"✅ Data berhasil diambil dari: **{used_ticker}**")
 
 df = build_features(raw)
 if df.empty:
