@@ -1,5 +1,5 @@
 # ================================================
-# IHSG FORECAST STREAMLIT APP — FINAL ROBUST VERSION (NO ERRORS)
+# IHSG FORECAST STREAMLIT APP — FINAL STABLE VERSION (ERROR-FREE)
 # ================================================
 import streamlit as st
 import pandas as pd
@@ -24,7 +24,7 @@ TICKER = "^JKSE"
 # HELPER FUNCTIONS
 # --------------------------------
 def _find_close_col(df: pd.DataFrame):
-    """Temukan kolom yang mengandung 'close' (string/tuple compatible)."""
+    """Temukan kolom yang mengandung 'close'."""
     for col in df.columns:
         name = ('_'.join(map(str, col)) if isinstance(col, tuple) else str(col))
         if 'close' in name.lower():
@@ -42,25 +42,27 @@ def _ensure_1d_series(s):
 # --------------------------------
 def build_features(data: pd.DataFrame) -> pd.DataFrame:
     """Feature engineering untuk prediksi IHSG."""
-    df = data.copy()
+    if data is None or data.empty:
+        return pd.DataFrame()
 
-    # pastikan ada kolom 'close' standar
+    df = data.copy()
     close_col = _find_close_col(df)
     if close_col is None:
-        raise KeyError("Tidak ditemukan kolom yang mengandung 'close'.")
+        return pd.DataFrame()
+
     df['close'] = _ensure_1d_series(df[close_col]).astype(float)
 
     # Returns & lags
     df['ret'] = df['close'].pct_change()
     df['logret'] = np.log1p(df['ret'])
-    for lag in [1,2,3,5,10,20]:
+    for lag in [1, 2, 3, 5, 10, 20]:
         df[f'lag_ret_{lag}'] = df['ret'].shift(lag)
         df[f'lag_close_{lag}'] = df['close'].shift(lag)
-    for win in [5,10,20,60]:
+    for win in [5, 10, 20, 60]:
         df[f'roll_mean_{win}'] = df['close'].rolling(win).mean()
-        df[f'roll_std_{win}']  = df['close'].rolling(win).std()
-        df[f'roll_min_{win}']  = df['close'].rolling(win).min()
-        df[f'roll_max_{win}']  = df['close'].rolling(win).max()
+        df[f'roll_std_{win}'] = df['close'].rolling(win).std()
+        df[f'roll_min_{win}'] = df['close'].rolling(win).min()
+        df[f'roll_max_{win}'] = df['close'].rolling(win).max()
 
     # TA indicators
     try:
@@ -72,8 +74,8 @@ def build_features(data: pd.DataFrame) -> pd.DataFrame:
         df['macd_hist'] = macd.macd_diff()
         bb = BollingerBands(df['close'])
         df['bb_high'] = bb.bollinger_hband()
-        df['bb_low']  = bb.bollinger_lband()
-        df['bb_pct']  = (df['close'] - df['bb_low']) / (df['bb_high'] - df['bb_low'])
+        df['bb_low'] = bb.bollinger_lband()
+        df['bb_pct'] = (df['close'] - df['bb_low']) / (df['bb_high'] - df['bb_low'])
     except Exception:
         pass
 
@@ -82,19 +84,14 @@ def build_features(data: pd.DataFrame) -> pd.DataFrame:
     df['month'] = df.index.month
     df['target_ret_1d'] = df['ret'].shift(-1)
 
-    # Drop NaN tapi simpan baris terakhir (untuk prediksi)
+    # Drop NaN tapi tetap simpan baris terakhir
     if len(df) > 0:
         last = df.iloc[[-1]]
         df = df.dropna()
-
-        # Kalau df kosong (semua NaN), gunakan hanya baris terakhir
         if df.empty:
             df = last
-        else:
-            # kalau baris terakhir hilang karena NaN, tambahkan kembali
-            if df.index[-1] != last.index[-1]:
-                df = pd.concat([df, last])
-
+        elif df.index[-1] != last.index[-1]:
+            df = pd.concat([df, last])
 
     return df
 
@@ -102,7 +99,6 @@ def build_features(data: pd.DataFrame) -> pd.DataFrame:
 # ALIGN FEATURE NAMES
 # --------------------------------
 def align_training_feature_names(df: pd.DataFrame, expected_features: list) -> pd.DataFrame:
-    """Tambahkan alias kolom agar cocok dengan model (mis. close_^jkse)."""
     base_map = {
         'close_^jkse': 'close',
         'open_^jkse': 'open',
@@ -130,12 +126,16 @@ model, meta = load_model()
 # FORECAST FUNCTION
 # --------------------------------
 def forecast_prices(df, model, horizon_days, features):
+    if df is None or df.empty:
+        return pd.DataFrame()
+
     df = df.copy()
     preds, future_dates, future_prices = [], [], []
 
     close_col = _find_close_col(df)
     if close_col is None:
-        raise KeyError("Tidak ditemukan kolom 'close' di DataFrame.")
+        return pd.DataFrame()
+
     last_date = df.index[-1]
     last_close = float(_ensure_1d_series(df[close_col]).iloc[-1])
 
@@ -143,12 +143,15 @@ def forecast_prices(df, model, horizon_days, features):
         new_row = df.iloc[-1:].copy()
         new_row.index = [last_date + dt.timedelta(days=i)]
         df = pd.concat([df, new_row])
+
         tmp = build_features(df)
         tmp = align_training_feature_names(tmp, features)
 
+        if tmp.empty:
+            continue
         X_latest = tmp.reindex(columns=features, fill_value=0).iloc[-1:].values
         if X_latest.shape[0] == 0:
-            continue  # skip jika kosong
+            continue
 
         pred_ret = model.predict(X_latest)[0]
         preds.append(pred_ret)
@@ -157,6 +160,9 @@ def forecast_prices(df, model, horizon_days, features):
         last_close *= (1 + pred_ret)
         df.loc[df.index[-1], close_col] = last_close
         future_prices.append(last_close)
+
+    if not preds:
+        return pd.DataFrame()
 
     return pd.DataFrame({'date': future_dates, 'pred_ret': preds, 'pred_price': future_prices})
 
@@ -170,7 +176,7 @@ menggunakan **machine learning XGBoost** dengan data historis IHSG.
 """)
 
 st.sidebar.header("⚙️ Pengaturan Data")
-start = st.sidebar.date_input("Tanggal awal", dt.date(2015,1,1))
+start = st.sidebar.date_input("Tanggal awal", dt.date(2015, 1, 1))
 end = st.sidebar.date_input("Tanggal akhir", dt.date.today())
 horizon_options = {
     "1 Hari": 1,
@@ -187,37 +193,48 @@ horizon_days = horizon_options[horizon_label]
 with st.spinner("📥 Mengambil data IHSG..."):
     raw = yf.download(TICKER, start=start, end=end, auto_adjust=True)
     raw = raw.rename(columns=str.lower)
+
+if raw.empty:
+    st.error("❌ Data IHSG kosong! Tidak ada data untuk periode yang dipilih.")
+    st.stop()
+
 df = build_features(raw)
+if df.empty:
+    st.error("❌ Gagal membangun fitur — mungkin periode terlalu pendek.")
+    st.stop()
+
 df = align_training_feature_names(df, meta['features'])
 
 # Forecast
 with st.spinner(f"🔮 Membuat prediksi {horizon_label} ke depan..."):
     forecast_df = forecast_prices(df, model, horizon_days, meta['features'])
 
+if forecast_df.empty:
+    st.error("❌ Prediksi gagal karena data tidak mencukupi.")
+    st.stop()
+
+# Confidence
 pred_std = np.std(forecast_df['pred_ret'])
 forecast_df['upper'] = forecast_df['pred_price'] * (1 + pred_std)
 forecast_df['lower'] = forecast_df['pred_price'] * (1 - pred_std)
 
+# Chart
 hist_close_col = _find_close_col(df)
 combined_hist = pd.DataFrame({'date': df.index, 'price': _ensure_1d_series(df[hist_close_col])})
 combined_fore = pd.DataFrame({'date': forecast_df['date'], 'price': forecast_df['pred_price']})
 
-# Plotly Chart
 st.subheader(f"📊 Grafik Harga IHSG + Prediksi ({horizon_label})")
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=combined_hist['date'], y=combined_hist['price'],
-                         mode='lines', name='Harga Historis',
-                         line=dict(color='blue', width=2)))
+                         mode='lines', name='Harga Historis', line=dict(color='blue', width=2)))
 fig.add_trace(go.Scatter(x=combined_fore['date'], y=combined_fore['price'],
-                         mode='lines', name='Prediksi Harga',
-                         line=dict(color='orange', width=3, dash='dash')))
+                         mode='lines', name='Prediksi Harga', line=dict(color='orange', width=3, dash='dash')))
 fig.add_trace(go.Scatter(x=list(forecast_df['date']) + list(forecast_df['date'])[::-1],
                          y=list(forecast_df['upper']) + list(forecast_df['lower'])[::-1],
                          fill='toself', fillcolor='rgba(255,165,0,0.2)',
-                         line=dict(color='rgba(255,255,255,0)'), showlegend=True,
-                         name='Confidence ±σ'))
+                         line=dict(color='rgba(255,255,255,0)'), showlegend=True, name='Confidence ±σ'))
 fig.update_layout(xaxis_title="Tanggal", yaxis_title="Harga IHSG",
-                  template="plotly_white",
+                  template="plotly_dark" if st.get_option("theme.base") == "dark" else "plotly_white",
                   legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
 st.plotly_chart(fig, use_container_width=True)
 
@@ -237,10 +254,8 @@ forecast_df_display = forecast_df_display.rename(columns={
     'date': 'Tanggal', 'pred_price': 'Prediksi Harga (Rp)', 'pred_ret': 'Prediksi Return (%)'})
 st.dataframe(forecast_df_display[['Tanggal', 'Prediksi Harga (Rp)', 'Prediksi Return (%)']].style.format({
     'Prediksi Harga (Rp)': '{:,.0f}', 'Prediksi Return (%)': '{:+.4f}'}))
-
 csv_data = forecast_df_display.to_csv(index=False).encode('utf-8')
 st.download_button("💾 Download hasil prediksi (CSV)", data=csv_data,
-                   file_name=f"IHSG_Forecast_{horizon_label.replace(' ','_')}.csv",
-                   mime="text/csv")
+                   file_name=f"IHSG_Forecast_{horizon_label.replace(' ','_')}.csv", mime="text/csv")
 
 st.caption("📘 Catatan: Prediksi bersifat indikatif dan tidak menjamin hasil investasi.")
