@@ -1,5 +1,5 @@
 # ================================================
-# IHSG FORECAST STREAMLIT APP — FINAL CLOUD STABLE VERSION
+# IHSG FORECAST STREAMLIT APP — FINAL CLOUD-STABLE VERSION
 # ================================================
 import streamlit as st
 import pandas as pd
@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 from ta.momentum import RSIIndicator
 from ta.trend import MACD
 from ta.volatility import BollingerBands
+from pandas_datareader import data as web  # fallback ke Stooq
 
 # --------------------------------
 # CONFIG
@@ -24,8 +25,7 @@ ALT_TICKERS = ["JKSE.JK", "IDX:JKSE"]
 # --------------------------------
 # HELPER FUNCTIONS
 # --------------------------------
-def _find_close_col(df: pd.DataFrame):
-    """Temukan kolom yang mengandung 'close'."""
+def _find_close_col(df):
     for col in df.columns:
         name = ('_'.join(map(str, col)) if isinstance(col, tuple) else str(col))
         if 'close' in name.lower():
@@ -33,17 +33,13 @@ def _find_close_col(df: pd.DataFrame):
     return None
 
 def _ensure_1d_series(s):
-    """Pastikan kolom menjadi Series 1D."""
-    if isinstance(s, pd.DataFrame):
-        return s.squeeze()
-    return s
+    return s.squeeze() if isinstance(s, pd.DataFrame) else s
 
 # --------------------------------
-# FETCH DATA (dengan fallback otomatis)
+# FETCH DATA (multi-sumber: Yahoo + Stooq + Lokal)
 # --------------------------------
 @st.cache_data(show_spinner=False)
 def fetch_data(start, end):
-    """Ambil data IHSG dengan fallback otomatis jika ticker utama gagal."""
     tickers_to_try = [PRIMARY_TICKER] + ALT_TICKERS
     for tk in tickers_to_try:
         try:
@@ -51,16 +47,39 @@ def fetch_data(start, end):
             if not df.empty:
                 df = df.rename(columns=str.lower)
                 df.index.name = "date"
-                return df, tk
-        except Exception as e:
-            print(f"❌ Gagal mengambil {tk}: {e}")
+                return df, f"Yahoo Finance ({tk})"
+        except Exception:
+            pass
+
+    # Fallback ke Stooq
+    try:
+        st.warning("⚠️ Yahoo Finance gagal, mencoba sumber cadangan Stooq...")
+        df = web.DataReader("JKSE", "stooq", start, end)
+        if not df.empty:
+            df = df.rename(columns=str.lower).sort_index()
+            df.index.name = "date"
+            return df, "Stooq (JKSE)"
+    except Exception:
+        pass
+
+    # Fallback ke file lokal (jika ada)
+    local_path = os.path.join(ARTIFACTS_DIR, "ihsg_data.csv")
+    if os.path.exists(local_path):
+        try:
+            st.warning("⚠️ Semua sumber gagal, memuat data dari file lokal...")
+            df = pd.read_csv(local_path, parse_dates=["date"], index_col="date")
+            df = df.rename(columns=str.lower)
+            return df, "Local Backup CSV"
+        except Exception:
+            pass
+
     return pd.DataFrame(), None
 
 # --------------------------------
 # FEATURE ENGINEERING
 # --------------------------------
-def build_features(data: pd.DataFrame) -> pd.DataFrame:
-    if data is None or data.empty:
+def build_features(data):
+    if data.empty:
         return pd.DataFrame()
 
     df = data.copy()
@@ -68,41 +87,37 @@ def build_features(data: pd.DataFrame) -> pd.DataFrame:
     if close_col is None:
         return pd.DataFrame()
 
-    df['close'] = _ensure_1d_series(df[close_col]).astype(float)
+    df["close"] = _ensure_1d_series(df[close_col]).astype(float)
+    df["ret"] = df["close"].pct_change()
+    df["logret"] = np.log1p(df["ret"])
 
-    # Returns & lags
-    df['ret'] = df['close'].pct_change()
-    df['logret'] = np.log1p(df['ret'])
     for lag in [1, 2, 3, 5, 10, 20]:
-        df[f'lag_ret_{lag}'] = df['ret'].shift(lag)
-        df[f'lag_close_{lag}'] = df['close'].shift(lag)
+        df[f"lag_ret_{lag}"] = df["ret"].shift(lag)
+        df[f"lag_close_{lag}"] = df["close"].shift(lag)
     for win in [5, 10, 20, 60]:
-        df[f'roll_mean_{win}'] = df['close'].rolling(win).mean()
-        df[f'roll_std_{win}'] = df['close'].rolling(win).std()
-        df[f'roll_min_{win}'] = df['close'].rolling(win).min()
-        df[f'roll_max_{win}'] = df['close'].rolling(win).max()
+        df[f"roll_mean_{win}"] = df["close"].rolling(win).mean()
+        df[f"roll_std_{win}"] = df["close"].rolling(win).std()
+        df[f"roll_min_{win}"] = df["close"].rolling(win).min()
+        df[f"roll_max_{win}"] = df["close"].rolling(win).max()
 
-    # TA indicators
     try:
-        rsi = RSIIndicator(df['close'])
-        df['rsi14'] = rsi.rsi()
-        macd = MACD(df['close'])
-        df['macd'] = macd.macd()
-        df['macd_signal'] = macd.macd_signal()
-        df['macd_hist'] = macd.macd_diff()
-        bb = BollingerBands(df['close'])
-        df['bb_high'] = bb.bollinger_hband()
-        df['bb_low'] = bb.bollinger_lband()
-        df['bb_pct'] = (df['close'] - df['bb_low']) / (df['bb_high'] - df['bb_low'])
+        rsi = RSIIndicator(df["close"])
+        df["rsi14"] = rsi.rsi()
+        macd = MACD(df["close"])
+        df["macd"] = macd.macd()
+        df["macd_signal"] = macd.macd_signal()
+        df["macd_hist"] = macd.macd_diff()
+        bb = BollingerBands(df["close"])
+        df["bb_high"] = bb.bollinger_hband()
+        df["bb_low"] = bb.bollinger_lband()
+        df["bb_pct"] = (df["close"] - df["bb_low"]) / (df["bb_high"] - df["bb_low"])
     except Exception:
         pass
 
-    # Kalender & target
-    df['dow'] = df.index.dayofweek
-    df['month'] = df.index.month
-    df['target_ret_1d'] = df['ret'].shift(-1)
+    df["dow"] = df.index.dayofweek
+    df["month"] = df.index.month
+    df["target_ret_1d"] = df["ret"].shift(-1)
 
-    # Drop NaN tapi simpan baris terakhir
     if len(df) > 0:
         last = df.iloc[[-1]]
         df = df.dropna()
@@ -116,13 +131,13 @@ def build_features(data: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------
 # ALIGN FEATURE NAMES
 # --------------------------------
-def align_training_feature_names(df: pd.DataFrame, expected_features: list) -> pd.DataFrame:
+def align_training_feature_names(df, expected_features):
     base_map = {
-        'close_^jkse': 'close',
-        'open_^jkse': 'open',
-        'high_^jkse': 'high',
-        'low_^jkse': 'low',
-        'volume_^jkse': 'volume',
+        "close_^jkse": "close",
+        "open_^jkse": "open",
+        "high_^jkse": "high",
+        "low_^jkse": "low",
+        "volume_^jkse": "volume",
     }
     out = df.copy()
     for exp in expected_features:
@@ -144,12 +159,11 @@ model, meta = load_model()
 # FORECAST FUNCTION
 # --------------------------------
 def forecast_prices(df, model, horizon_days, features):
-    if df is None or df.empty:
+    if df.empty:
         return pd.DataFrame()
 
     df = df.copy()
     preds, future_dates, future_prices = [], [], []
-
     close_col = _find_close_col(df)
     if close_col is None:
         return pd.DataFrame()
@@ -164,9 +178,9 @@ def forecast_prices(df, model, horizon_days, features):
 
         tmp = build_features(df)
         tmp = align_training_feature_names(tmp, features)
-
         if tmp.empty:
             continue
+
         X_latest = tmp.reindex(columns=features, fill_value=0).iloc[-1:].values
         if X_latest.shape[0] == 0:
             continue
@@ -179,10 +193,7 @@ def forecast_prices(df, model, horizon_days, features):
         df.loc[df.index[-1], close_col] = last_close
         future_prices.append(last_close)
 
-    if not preds:
-        return pd.DataFrame()
-
-    return pd.DataFrame({'date': future_dates, 'pred_ret': preds, 'pred_price': future_prices})
+    return pd.DataFrame({"date": future_dates, "pred_ret": preds, "pred_price": future_prices})
 
 # --------------------------------
 # STREAMLIT UI
@@ -209,71 +220,65 @@ horizon_days = horizon_options[horizon_label]
 
 # Fetch IHSG
 with st.spinner("📥 Mengambil data IHSG..."):
-    raw, used_ticker = fetch_data(start, end)
+    raw, used_source = fetch_data(start, end)
 
 if raw.empty:
-    st.error("❌ Data IHSG kosong! Tidak ada data untuk periode yang dipilih atau koneksi Yahoo Finance bermasalah.")
+    st.error("❌ Gagal mengambil data IHSG dari semua sumber.")
     st.stop()
 else:
-    st.success(f"✅ Data berhasil diambil dari: **{used_ticker}**")
+    st.success(f"✅ Data berhasil diambil dari: **{used_source}**")
 
 df = build_features(raw)
+df = align_training_feature_names(df, meta["features"])
 if df.empty:
-    st.error("❌ Gagal membangun fitur — mungkin periode terlalu pendek.")
+    st.error("❌ Tidak dapat membangun fitur dari data IHSG.")
     st.stop()
 
-df = align_training_feature_names(df, meta['features'])
-
-# Forecast
 with st.spinner(f"🔮 Membuat prediksi {horizon_label} ke depan..."):
-    forecast_df = forecast_prices(df, model, horizon_days, meta['features'])
+    forecast_df = forecast_prices(df, model, horizon_days, meta["features"])
 
 if forecast_df.empty:
     st.error("❌ Prediksi gagal karena data tidak mencukupi.")
     st.stop()
 
-# Confidence
-pred_std = np.std(forecast_df['pred_ret'])
-forecast_df['upper'] = forecast_df['pred_price'] * (1 + pred_std)
-forecast_df['lower'] = forecast_df['pred_price'] * (1 - pred_std)
+pred_std = np.std(forecast_df["pred_ret"])
+forecast_df["upper"] = forecast_df["pred_price"] * (1 + pred_std)
+forecast_df["lower"] = forecast_df["pred_price"] * (1 - pred_std)
 
-# Chart
 hist_close_col = _find_close_col(df)
-combined_hist = pd.DataFrame({'date': df.index, 'price': _ensure_1d_series(df[hist_close_col])})
-combined_fore = pd.DataFrame({'date': forecast_df['date'], 'price': forecast_df['pred_price']})
+combined_hist = pd.DataFrame({"date": df.index, "price": _ensure_1d_series(df[hist_close_col])})
+combined_fore = pd.DataFrame({"date": forecast_df["date"], "price": forecast_df["pred_price"]})
 
 st.subheader(f"📊 Grafik Harga IHSG + Prediksi ({horizon_label})")
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=combined_hist['date'], y=combined_hist['price'],
-                         mode='lines', name='Harga Historis', line=dict(color='blue', width=2)))
-fig.add_trace(go.Scatter(x=combined_fore['date'], y=combined_fore['price'],
-                         mode='lines', name='Prediksi Harga', line=dict(color='orange', width=3, dash='dash')))
-fig.add_trace(go.Scatter(x=list(forecast_df['date']) + list(forecast_df['date'])[::-1],
-                         y=list(forecast_df['upper']) + list(forecast_df['lower'])[::-1],
-                         fill='toself', fillcolor='rgba(255,165,0,0.2)',
-                         line=dict(color='rgba(255,255,255,0)'), showlegend=True, name='Confidence ±σ'))
-fig.update_layout(xaxis_title="Tanggal", yaxis_title="Harga IHSG",
-                  template="plotly_dark" if st.get_option("theme.base") == "dark" else "plotly_white",
+fig.add_trace(go.Scatter(x=combined_hist["date"], y=combined_hist["price"],
+                         mode="lines", name="Harga Historis", line=dict(color="blue", width=2)))
+fig.add_trace(go.Scatter(x=combined_fore["date"], y=combined_fore["price"],
+                         mode="lines", name="Prediksi Harga", line=dict(color="orange", width=3, dash="dash")))
+fig.add_trace(go.Scatter(x=list(forecast_df["date"]) + list(forecast_df["date"])[::-1],
+                         y=list(forecast_df["upper"]) + list(forecast_df["lower"])[::-1],
+                         fill="toself", fillcolor="rgba(255,165,0,0.2)",
+                         line=dict(color="rgba(255,255,255,0)"), showlegend=True, name="Confidence ±σ"))
+fig.update_layout(template="plotly_dark", xaxis_title="Tanggal", yaxis_title="Harga IHSG",
                   legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
 st.plotly_chart(fig, use_container_width=True)
 
-# Metrics
-predicted_price = forecast_df['pred_price'].iloc[-1]
+predicted_price = forecast_df["pred_price"].iloc[-1]
 last_price = _ensure_1d_series(df[hist_close_col]).iloc[-1]
 change_pct = ((predicted_price - last_price) / last_price) * 100
 st.metric(f"Perkiraan Harga IHSG ({horizon_label} ke depan)",
           f"{predicted_price:,.0f}", f"{change_pct:+.2f}%")
 
-# Table + Download
+# Table
 st.subheader("📅 Detail Hasil Prediksi per Hari")
 forecast_df_display = forecast_df.copy()
-forecast_df_display['date'] = forecast_df_display['date'].dt.strftime("%Y-%m-%d")
-forecast_df_display['pred_ret'] = forecast_df_display['pred_ret'] * 100
+forecast_df_display["date"] = forecast_df_display["date"].dt.strftime("%Y-%m-%d")
+forecast_df_display["pred_ret"] *= 100
 forecast_df_display = forecast_df_display.rename(columns={
-    'date': 'Tanggal', 'pred_price': 'Prediksi Harga (Rp)', 'pred_ret': 'Prediksi Return (%)'})
-st.dataframe(forecast_df_display[['Tanggal', 'Prediksi Harga (Rp)', 'Prediksi Return (%)']].style.format({
-    'Prediksi Harga (Rp)': '{:,.0f}', 'Prediksi Return (%)': '{:+.4f}'}))
-csv_data = forecast_df_display.to_csv(index=False).encode('utf-8')
+    "date": "Tanggal", "pred_price": "Prediksi Harga (Rp)", "pred_ret": "Prediksi Return (%)"})
+st.dataframe(forecast_df_display[["Tanggal", "Prediksi Harga (Rp)", "Prediksi Return (%)"]].style.format({
+    "Prediksi Harga (Rp)": "{:,.0f}", "Prediksi Return (%)": "{:+.4f}"}))
+csv_data = forecast_df_display.to_csv(index=False).encode("utf-8")
 st.download_button("💾 Download hasil prediksi (CSV)", data=csv_data,
                    file_name=f"IHSG_Forecast_{horizon_label.replace(' ','_')}.csv", mime="text/csv")
 

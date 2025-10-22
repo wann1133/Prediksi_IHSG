@@ -4,6 +4,8 @@ pandas==2.2.2
 scikit-learn==1.6.1
 scipy==1.13.1
 statsmodels==0.14.2
+pandas-datareader==0.10.0
+
 
 # Finance & indicators
 yfinance==0.2.48
