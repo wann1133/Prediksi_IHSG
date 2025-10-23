@@ -122,14 +122,37 @@ def fetch_data(start, end):
     """Ambil data IHSG dari CSV lokal atau fallback ke Stooq."""
     if os.path.exists(LOCAL_CSV_PATH):
         st.info("💾 Menggunakan data lokal IHSG (data_ihsg.csv)")
-        df = pd.read_csv(LOCAL_CSV_PATH, parse_dates=["Date"], index_col="Date")
-        df = df.rename(columns=str.lower)
-        df = df.loc[(df.index >= pd.Timestamp(start)) & (df.index <= pd.Timestamp(end))]
-        if not df.empty:
-            df.index.name = "date"
-            return df, "Local CSV"
+        try:
+            # Baca CSV tanpa asumsi nama kolom
+            df = pd.read_csv(LOCAL_CSV_PATH)
 
-    # fallback ke Stooq
+            # Normalisasi nama kolom agar huruf kecil semua
+            df.columns = [c.lower().strip() for c in df.columns]
+
+            # Tangani kolom tanggal (Date atau date)
+            if "date" in df.columns:
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.set_index("date")
+            else:
+                st.error("❌ File CSV tidak memiliki kolom 'Date' atau 'date'.")
+                st.stop()
+
+            # Filter rentang tanggal
+            df = df.loc[
+                (df.index >= pd.Timestamp(start)) & (df.index <= pd.Timestamp(end))
+            ]
+
+            # Pastikan kolom utama tersedia
+            if not all(x in df.columns for x in ["open", "high", "low", "close"]):
+                st.warning("⚠️ Beberapa kolom utama (open/high/low/close) tidak ditemukan.")
+            if not df.empty:
+                df.index.name = "date"
+                return df, "Local CSV"
+
+        except Exception as e:
+            st.warning(f"⚠️ Gagal membaca file CSV lokal: {e}")
+
+    # Fallback ke Stooq
     try:
         st.warning("⚠️ File lokal tidak ditemukan, mengambil data dari Stooq...")
         df = web.DataReader("JKSE", "stooq", start, end)
@@ -141,6 +164,7 @@ def fetch_data(start, end):
         st.error(f"❌ Gagal ambil data dari Stooq: {e}")
 
     return pd.DataFrame(), None
+
 
 # --------------------------------
 # FORECAST FUNCTION
