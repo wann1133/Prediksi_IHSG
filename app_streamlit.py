@@ -1,5 +1,5 @@
 # ================================================
-# IHSG FORECAST STREAMLIT APP — FINAL (CSV LOCAL + FALLBACK STOOQ)
+# IHSG FORECAST STREAMLIT APP — FINAL (CSV LOCAL + FALLBACK STOOQ + CONFIDENCE SCORE)
 # ================================================
 import streamlit as st
 import pandas as pd
@@ -177,6 +177,18 @@ def forecast_prices(df, model, horizon_days, features):
     return pd.DataFrame({'date': future_dates, 'pred_ret': preds, 'pred_price': future_prices})
 
 # --------------------------------
+# CONFIDENCE SCORE FUNCTION
+# --------------------------------
+def calculate_confidence(forecast_df: pd.DataFrame):
+    """Hitung confidence score model dari stabilitas prediksi."""
+    if forecast_df.empty or 'pred_ret' not in forecast_df:
+        return 0.0
+    std_pred = forecast_df['pred_ret'].std()
+    mean_abs = np.abs(forecast_df['pred_ret']).mean() + 1e-6
+    confidence = np.clip(100 * (1 - std_pred / (mean_abs * 5)), 0, 100)
+    return round(confidence, 2)
+
+# --------------------------------
 # STREAMLIT UI
 # --------------------------------
 st.title("📈 Prediksi IHSG — Multi-Horizon Forecast (Interaktif)")
@@ -213,6 +225,7 @@ df = align_training_feature_names(df, meta['features'])
 # Forecast
 with st.spinner(f"🔮 Membuat prediksi {horizon_label} ke depan..."):
     forecast_df = forecast_prices(df, model, horizon_days, meta['features'])
+    confidence_score = calculate_confidence(forecast_df)
 
 pred_std = np.std(forecast_df['pred_ret'])
 forecast_df['upper'] = forecast_df['pred_price'] * (1 + pred_std)
@@ -247,6 +260,14 @@ last_price = _ensure_1d_series(df[hist_close_col]).iloc[-1]
 change_pct = ((predicted_price - last_price) / last_price) * 100
 st.metric(f"Perkiraan Harga IHSG ({horizon_label} ke depan)",
           f"{predicted_price:,.0f}", f"{change_pct:+.2f}%")
+
+# Confidence display
+if confidence_score >= 80:
+    st.success(f"🟢 Model sangat yakin — Confidence Score: {confidence_score:.1f}%")
+elif confidence_score >= 60:
+    st.info(f"🟡 Model cukup yakin — Confidence Score: {confidence_score:.1f}%")
+else:
+    st.warning(f"🔴 Model kurang yakin — Confidence Score: {confidence_score:.1f}%")
 
 # Table + Download
 st.subheader("📅 Detail Hasil Prediksi per Hari")
