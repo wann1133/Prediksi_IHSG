@@ -85,33 +85,18 @@ def build_features(data: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------
 @st.cache_data(show_spinner=False)
 def fetch_data(start, end):
-    """Ambil data IHSG dari CSV lokal (multiheader) atau fallback ke Stooq."""
+    """Ambil data IHSG dari CSV bersih atau fallback ke Stooq."""
     if os.path.exists(LOCAL_CSV_PATH):
-        st.info("💾 Menggunakan data lokal IHSG (data_ihsg.csv)")
+        st.info("💾 Menggunakan data lokal IHSG (data_ihsg_clean.csv)")
         try:
-            # Coba baca multiheader (sesuai struktur file kamu)
-            df = pd.read_csv(LOCAL_CSV_PATH, header=[0, 1])
-            df.columns = [
-                "_".join([str(x) for x in col if x and str(x) != "nan"]).strip().lower()
-                for col in df.columns.values
-            ]
-            date_col = next((c for c in df.columns if "date" in c), None)
-            if date_col is None:
-                st.error("❌ File CSV tidak memiliki kolom 'Date' atau 'date'.")
-                st.stop()
-
-            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-            df = df.dropna(subset=[date_col]).set_index(date_col)
-            df = df.loc[
-                (df.index >= pd.Timestamp(start)) & (df.index <= pd.Timestamp(end))
-            ]
+            df = pd.read_csv(LOCAL_CSV_PATH, parse_dates=["date"], index_col="date")
+            df = df.loc[(df.index >= pd.Timestamp(start)) & (df.index <= pd.Timestamp(end))]
             if not df.empty:
-                df.index.name = "date"
-                return df, "Local CSV (MultiHeader)"
+                return df, "Local CSV (Clean)"
         except Exception as e:
-            st.warning(f"⚠️ Gagal membaca file multiheader: {e}")
+            st.warning(f"⚠️ Gagal membaca CSV lokal: {e}")
 
-    # fallback ke Stooq
+    # fallback ke Stooq (jaga-jaga)
     try:
         from pandas_datareader import data as web
         st.warning("⚠️ File lokal tidak ditemukan, mengambil data dari Stooq...")
@@ -124,6 +109,8 @@ def fetch_data(start, end):
         st.error(f"❌ Gagal ambil data dari Stooq: {e}")
 
     return pd.DataFrame(), None
+
+
 
 
 # --------------------------------
