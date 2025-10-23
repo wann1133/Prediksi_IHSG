@@ -122,7 +122,7 @@ def fetch_data(start, end):
     """Ambil data IHSG dari CSV lokal atau fallback ke Stooq."""
     if os.path.exists(LOCAL_CSV_PATH):
         st.info("💾 Menggunakan data lokal IHSG (data_ihsg.csv)")
-        df = pd.read_csv(LOCAL_CSV_PATH, parse_dates=["Date"], index_col="Date")
+        df = pd.read_csv(LOCAL_CSV_PATH, parse_dates=["date"], index_col="date")
         df = df.rename(columns=str.lower)
         df = df.loc[(df.index >= pd.Timestamp(start)) & (df.index <= pd.Timestamp(end))]
         if not df.empty:
